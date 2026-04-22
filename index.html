@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>THREAT MONITOR // E-Commerce Risk Intelligence</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <!-- JetBrains Mono for terminal authority -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['"JetBrains Mono"', '"Share Tech Mono"', 'monospace'],
+          },
+          colors: {
+            void:    '#080c10',
+            shell:   '#0d1117',
+            panel:   '#111820',
+            border:  '#1e2d3d',
+            dim:     '#243447',
+            muted:   '#4a6480',
+            ghost:   '#647d96',
+            text:    '#c9d1d9',
+            bright:  '#e6edf3',
+            green:   '#00ff88',
+            teal:    '#00d9c8',
+            amber:   '#ffb300',
+            red:     '#ff3b3b',
+            redDim:  '#7a1c1c',
+            blueDim: '#0d2137',
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      background-color: #080c10;
+      font-family: 'JetBrains Mono', 'Share Tech Mono', monospace;
+      color: #c9d1d9;
+      min-height: 100vh;
+    }
+
+    /* Scanline overlay for CRT texture */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,0,0,0.04) 2px,
+        rgba(0,0,0,0.04) 4px
+      );
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* Subtle grid pattern on background */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,255,136,0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,255,136,0.02) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    #app { position: relative; z-index: 1; }
+
+    /* Panel cards */
+    .panel {
+      background: #111820;
+      border: 1px solid #1e2d3d;
+      border-radius: 2px;
+    }
+
+    .panel-header {
+      border-bottom: 1px solid #1e2d3d;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .panel-header .label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: #4a6480;
+    }
+
+    .panel-header .accent {
+      color: #00ff88;
+    }
+
+    /* Blinking cursor */
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0; }
+    }
+    .cursor {
+      display: inline-block;
+      width: 8px;
+      height: 14px;
+      background: #00ff88;
+      animation: blink 1s step-end infinite;
+      vertical-align: middle;
+      margin-left: 2px;
+    }
+
+    /* Threat badge pulse */
+    @keyframes pulse-red {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255,59,59,0.4); }
+      50%       { box-shadow: 0 0 0 6px rgba(255,59,59,0); }
+    }
+    .badge-threat { animation: pulse-red 2s ease-in-out infinite; }
+
+    /* Status dot */
+    @keyframes pulse-green {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.3; }
+    }
+    .status-live { animation: pulse-green 1.8s ease-in-out infinite; }
+
+    /* Connection error state */
+    #error-state {
+      display: none;
+      background: #0d0505;
+      border: 1px solid #7a1c1c;
+    }
+
+    /* Stat cards */
+    .stat-card {
+      background: #0d1117;
+      border: 1px solid #1e2d3d;
+      border-radius: 2px;
+      padding: 14px 18px;
+      position: relative;
+      overflow: hidden;
+    }
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0;
+      width: 3px; height: 100%;
+    }
+    .stat-card.threat::before  { background: #ff3b3b; }
+    .stat-card.warn::before    { background: #ffb300; }
+    .stat-card.info::before    { background: #00d9c8; }
+    .stat-card.ok::before      { background: #00ff88; }
+
+    .stat-value {
+      font-size: 28px;
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -0.03em;
+    }
+    .stat-label {
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: #4a6480;
+      margin-top: 4px;
+    }
+
+    /* Loading bar */
+    @keyframes load-bar {
+      0%   { width: 0%; }
+      100% { width: 100%; }
+    }
+    #loader-bar {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, #00ff88, transparent);
+      animation: load-bar 1.8s ease-in-out infinite;
+    }
+
+    /* Chart container */
+    .chart-wrap {
+      padding: 16px;
+      position: relative;
+    }
+
+    /* Table styles */
+    .data-table { width: 100%; border-collapse: collapse; }
+    .data-table th {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: #4a6480;
+      border-bottom: 1px solid #1e2d3d;
+      padding: 6px 10px;
+      text-align: left;
+    }
+    .data-table td {
+      font-size: 11px;
+      padding: 7px 10px;
+      border-bottom: 1px solid #111820;
+      color: #c9d1d9;
+    }
+    .data-table tr:last-child td { border-bottom: none; }
+    .data-table tr:hover td { background: rgba(0,255,136,0.03); }
+    .ip-cell { color: #00d9c8; }
+    .count-cell { color: #ff3b3b; font-weight: 600; }
+
+    /* Header bar */
+    .header-bar {
+      background: #0d1117;
+      border-bottom: 1px solid #1e2d3d;
+    }
+
+    /* Fade-in animation */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .fade-in { animation: fadeIn 0.4s ease forwards; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: #0d1117; }
+    ::-webkit-scrollbar-thumb { background: #1e2d3d; border-radius: 2px; }
+  </style>
+</head>
+
+<body>
+<div id="app">
+
+  <!-- ═══════════════════════════════════════════════════════ HEADER -->
+  <header class="header-bar sticky top-0 z-50">
+    <div class="max-w-screen-2xl mx-auto px-5 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-4">
+        <!-- Logo mark -->
+        <div class="flex items-center gap-2">
+          <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+            <polygon points="11,1 21,6 21,16 11,21 1,16 1,6" stroke="#00ff88" stroke-width="1.2" fill="none"/>
+            <polygon points="11,5 17,8.5 17,13.5 11,17 5,13.5 5,8.5" stroke="#00ff88" stroke-width="0.6" fill="rgba(0,255,136,0.06)"/>
+            <circle cx="11" cy="11" r="2" fill="#00ff88"/>
+          </svg>
+          <span class="text-xs font-bold tracking-[0.2em] text-bright uppercase">ThreatMonitor</span>
+        </div>
+        <span class="text-muted text-xs hidden sm:inline">//</span>
+        <span class="text-xs text-ghost tracking-widest hidden sm:inline">E-COMMERCE RISK INTELLIGENCE</span>
+      </div>
+
+      <div class="flex items-center gap-5">
+        <div class="flex items-center gap-2">
+          <div class="w-2 h-2 rounded-full bg-green status-live"></div>
+          <span class="text-xs text-ghost" id="status-text">AWAITING DATA</span>
+        </div>
+        <span class="text-xs text-muted" id="last-refresh">--:--:--</span>
+        <button
+          onclick="fetchMetrics()"
+          class="text-xs px-3 py-1.5 border border-border text-ghost hover:border-green hover:text-green transition-colors duration-150 tracking-widest"
+        >⟳ REFRESH</button>
+      </div>
+    </div>
+    <!-- Loading bar -->
+    <div id="loader-container" class="h-px bg-void hidden">
+      <div id="loader-bar"></div>
+    </div>
+  </header>
+
+  <main class="max-w-screen-2xl mx-auto px-5 py-6 space-y-5">
+
+    <!-- ══════════════════════════════════════════ CONNECTION ERROR -->
+    <div id="error-state" class="panel rounded-none p-0">
+      <div class="panel-header">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="#ff3b3b"><path d="M12 2L1 21h22L12 2zm0 3.5L20.5 19h-17L12 5.5zM11 10v4h2v-4h-2zm0 6v2h2v-2h-2z"/></svg>
+        <span class="label accent" style="color:#ff3b3b;">CRITICAL</span>
+        <span class="label">— SYSTEM FAULT</span>
+      </div>
+      <div class="p-6 space-y-3">
+        <p class="text-red font-bold text-sm tracking-widest">⚠ CONNECTION REFUSED — BACKEND UNREACHABLE</p>
+        <p class="text-ghost text-xs leading-relaxed">
+          Failed to establish connection to <code class="text-amber bg-void px-1 py-0.5">http://localhost:8000/api/metrics</code>
+        </p>
+        <div class="bg-void border border-redDim p-4 text-xs space-y-1.5 text-ghost">
+          <p class="text-amber font-bold tracking-widest mb-2">DIAGNOSTIC CHECKLIST:</p>
+          <p>› Verify <code class="text-text">generate_logs.py</code> has been executed → <code class="text-green">access.log</code> must exist</p>
+          <p>› Verify FastAPI server is running: <code class="text-green">uvicorn main:app --port 8000</code></p>
+          <p>› Confirm dependencies: <code class="text-green">pip install fastapi uvicorn</code></p>
+          <p>› Check for port conflicts on <code class="text-text">:8000</code></p>
+        </div>
+        <p id="error-detail" class="text-xs text-redDim font-bold"></p>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════ STAT SUMMARY -->
+    <div id="stats-grid" class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div class="stat-card threat">
+        <div class="stat-value text-red" id="stat-failed-logins">--</div>
+        <div class="stat-label">Failed Logins</div>
+      </div>
+      <div class="stat-card warn">
+        <div class="stat-value text-amber" id="stat-sqli">--</div>
+        <div class="stat-label">SQLi Attempts</div>
+      </div>
+      <div class="stat-card info">
+        <div class="stat-value text-teal" id="stat-xss">--</div>
+        <div class="stat-label">XSS Attempts</div>
+      </div>
+      <div class="stat-card ok">
+        <div class="stat-value text-green" id="stat-bot-ips">--</div>
+        <div class="stat-label">Bot IPs Detected</div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════ CHARTS ROW -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+      <!-- Chart 1: Failed Logins Bar -->
+      <div class="panel lg:col-span-2">
+        <div class="panel-header">
+          <span class="w-2 h-2 rounded-full bg-red badge-threat flex-shrink-0"></span>
+          <span class="label accent">FAILED AUTH</span>
+          <span class="label">— ATTEMPTS BY SOURCE IP</span>
+        </div>
+        <div class="chart-wrap" style="height:280px;">
+          <canvas id="chart-failed-logins"></canvas>
+        </div>
+      </div>
+
+      <!-- Chart 2: Suspicious Types Doughnut -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="w-2 h-2 rounded-full bg-amber flex-shrink-0"></span>
+          <span class="label" style="color:#ffb300;">INJECTION</span>
+          <span class="label">— THREAT VECTOR SPLIT</span>
+        </div>
+        <div class="chart-wrap flex items-center justify-center" style="height:280px;">
+          <canvas id="chart-suspicious"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═════════════════════════════════════════ BOT ROW -->
+    <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
+
+      <!-- Chart 3: Bot Activity Bar -->
+      <div class="panel lg:col-span-3">
+        <div class="panel-header">
+          <span class="w-2 h-2 rounded-full bg-teal flex-shrink-0"></span>
+          <span class="label" style="color:#00d9c8;">BOT ACTIVITY</span>
+          <span class="label">— REQUEST VOLUME BY IP</span>
+        </div>
+        <div class="chart-wrap" style="height:260px;">
+          <canvas id="chart-bot-activity"></canvas>
+        </div>
+      </div>
+
+      <!-- Table: Top Threat Actors -->
+      <div class="panel lg:col-span-2">
+        <div class="panel-header">
+          <span class="w-2 h-2 rounded-full bg-red flex-shrink-0"></span>
+          <span class="label">TOP THREAT ACTORS</span>
+        </div>
+        <div style="max-height:260px; overflow-y:auto;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>SOURCE IP</th>
+                <th>TYPE</th>
+                <th>HITS</th>
+              </tr>
+            </thead>
+            <tbody id="threat-table-body">
+              <tr>
+                <td colspan="3" class="text-center text-muted text-xs py-8">
+                  Waiting for data<span class="cursor"></span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ═══════════════════════════════════════════ FOOTER / TERMINAL -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="label accent">&gt;_</span>
+        <span class="label">SYSTEM LOG</span>
+      </div>
+      <div id="terminal" class="p-3 text-xs text-ghost space-y-0.5 font-mono" style="max-height:100px; overflow-y:auto;"></div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+  // ─────────────────────────────────────────────────────── CONFIG
+  const API_URL = 'http://localhost:8000/api/metrics';
+  const CHART_DEFAULTS = {
+    color: {
+      green:  '#00ff88',
+      teal:   '#00d9c8',
+      amber:  '#ffb300',
+      red:    '#ff3b3b',
+      redDim: 'rgba(255,59,59,0.15)',
+      dim:    '#243447',
+      border: '#1e2d3d',
+      text:   '#c9d1d9',
+      ghost:  '#647d96',
+    }
+  };
+
+  // Chart.js global defaults
+  Chart.defaults.color          = CHART_DEFAULTS.color.ghost;
+  Chart.defaults.borderColor    = CHART_DEFAULTS.color.border;
+  Chart.defaults.font.family    = "'JetBrains Mono', monospace";
+  Chart.defaults.font.size      = 10;
+
+  // Chart instances (held for destroy/re-create on refresh)
+  let charts = {};
+
+  // ─────────────────────────────────────────────────────── TERMINAL LOG
+  function log(msg, level = 'info') {
+    const el   = document.getElementById('terminal');
+    const ts   = new Date().toLocaleTimeString('en-GB', { hour12: false });
+    const colors = { info: '#4a6480', ok: '#00ff88', warn: '#ffb300', error: '#ff3b3b' };
+    const prefix = { info: '·', ok: '✓', warn: '⚠', error: '✗' };
+    const line = document.createElement('p');
+    line.style.color = colors[level] || colors.info;
+    line.textContent = `[${ts}] ${prefix[level]} ${msg}`;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  // ─────────────────────────────────────────────────────── LOADER
+  function setLoading(active) {
+    document.getElementById('loader-container').classList.toggle('hidden', !active);
+  }
+
+  // ─────────────────────────────────────────────────────── ERROR STATE
+  function showError(detail) {
+    document.getElementById('error-state').style.display = 'block';
+    document.getElementById('error-detail').textContent  = detail ? `Error: ${detail}` : '';
+    document.getElementById('status-text').textContent   = 'OFFLINE';
+    document.getElementById('status-text').style.color  = '#ff3b3b';
+  }
+
+  function hideError() {
+    document.getElementById('error-state').style.display = 'none';
+    document.getElementById('status-text').textContent   = 'LIVE';
+    document.getElementById('status-text').style.color  = '#00ff88';
+  }
+
+  // ─────────────────────────────────────────────────────── CHART HELPERS
+  function destroyChart(id) {
+    if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+  }
+
+  function buildBarChart(canvasId, labels, data, color, label) {
+    destroyChart(canvasId);
+    const ctx = document.getElementById(canvasId).getContext('2d');
+    charts[canvasId] = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label,
+          data,
+          backgroundColor: `${color}22`,
+          borderColor:     color,
+          borderWidth:     1,
+          borderRadius:    1,
+          hoverBackgroundColor: `${color}44`,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#0d1117',
+            borderColor:     color,
+            borderWidth:     1,
+            titleColor:      CHART_DEFAULTS.color.text,
+            bodyColor:       color,
+            padding:         10,
+          }
+        },
+        scales: {
+          x: {
+            grid:  { color: '#1e2d3d', lineWidth: 0.5 },
+            ticks: { color: CHART_DEFAULTS.color.ghost, font: { size: 9 }, maxRotation: 30 },
+          },
+          y: {
+            grid:  { color: '#1e2d3d', lineWidth: 0.5 },
+            ticks: { color: CHART_DEFAULTS.color.ghost, font: { size: 9 }, precision: 0 },
+            beginAtZero: true,
+          }
+        },
+        animation: { duration: 600, easing: 'easeInOutQuart' }
+      }
+    });
+  }
+
+  function buildDoughnutChart(canvasId, labels, data) {
+    destroyChart(canvasId);
+    const ctx = document.getElementById(canvasId).getContext('2d');
+    const colors = [CHART_DEFAULTS.color.amber, CHART_DEFAULTS.color.teal];
+    charts[canvasId] = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels,
+        datasets: [{
+          data,
+          backgroundColor: colors.map(c => `${c}30`),
+          borderColor:     colors,
+          borderWidth:     1.5,
+          hoverBackgroundColor: colors.map(c => `${c}55`),
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '68%',
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: {
+              color:     CHART_DEFAULTS.color.ghost,
+              font:      { size: 10 },
+              padding:   16,
+              boxWidth:  10,
+              boxHeight: 10,
+            }
+          },
+          tooltip: {
+            backgroundColor: '#0d1117',
+            borderColor:     '#1e2d3d',
+            borderWidth:     1,
+            titleColor:      CHART_DEFAULTS.color.text,
+            bodyColor:       CHART_DEFAULTS.color.text,
+            padding:         10,
+          }
+        },
+        animation: { duration: 700, easing: 'easeInOutQuart' }
+      }
+    });
+  }
+
+  // ─────────────────────────────────────────────────────── STAT CARDS
+  function updateStats(data) {
+    const failedTotal = Object.values(data.failed_logins).reduce((a, b) => a + b, 0);
+    const botCount    = Object.keys(data.bot_activity).length;
+
+    document.getElementById('stat-failed-logins').textContent = failedTotal;
+    document.getElementById('stat-sqli').textContent          = data.suspicious_requests.SQLi || 0;
+    document.getElementById('stat-xss').textContent           = data.suspicious_requests.XSS  || 0;
+    document.getElementById('stat-bot-ips').textContent       = botCount;
+  }
+
+  // ─────────────────────────────────────────────────────── THREAT TABLE
+  function updateThreatTable(data) {
+    const rows = [];
+
+    // Failed login IPs
+    for (const [ip, count] of Object.entries(data.failed_logins)) {
+      rows.push({ ip, type: 'FAILED AUTH', count, color: '#ff3b3b' });
+    }
+
+    // Bot IPs (avoid duplicates)
+    const failedIPs = new Set(Object.keys(data.failed_logins));
+    for (const [ip, count] of Object.entries(data.bot_activity)) {
+      if (!failedIPs.has(ip)) {
+        rows.push({ ip, type: 'BOT', count, color: '#00d9c8' });
+      }
+    }
+
+    // Sort by count desc, top 10
+    rows.sort((a, b) => b.count - a.count);
+    const top = rows.slice(0, 10);
+
+    const tbody = document.getElementById('threat-table-body');
+    if (top.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-6 text-xs">NO THREATS DETECTED</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = top.map(r => `
+      <tr>
+        <td class="ip-cell">${escapeHtml(r.ip)}</td>
+        <td style="color:${r.color}; font-size:9px; letter-spacing:0.1em;">${r.type}</td>
+        <td class="count-cell">${r.count}</td>
+      </tr>
+    `).join('');
+  }
+
+  // ─────────────────────────────────────────────────────── RENDER ALL
+  function renderDashboard(data) {
+    hideError();
+
+    // Stat cards
+    updateStats(data);
+
+    // ── Chart 1: Failed Logins bar
+    const flEntries = Object.entries(data.failed_logins).sort((a, b) => b[1] - a[1]).slice(0, 12);
+    if (flEntries.length > 0) {
+      buildBarChart(
+        'chart-failed-logins',
+        flEntries.map(e => e[0]),
+        flEntries.map(e => e[1]),
+        CHART_DEFAULTS.color.red,
+        'Failed Login Attempts'
+      );
+    }
+
+    // ── Chart 2: Suspicious types doughnut
+    const sr = data.suspicious_requests;
+    buildDoughnutChart(
+      'chart-suspicious',
+      ['SQL Injection', 'Cross-Site Scripting'],
+      [sr.SQLi || 0, sr.XSS || 0]
+    );
+
+    // ── Chart 3: Bot activity bar
+    const botEntries = Object.entries(data.bot_activity).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    if (botEntries.length > 0) {
+      buildBarChart(
+        'chart-bot-activity',
+        botEntries.map(e => e[0]),
+        botEntries.map(e => e[1]),
+        CHART_DEFAULTS.color.teal,
+        'Bot Requests'
+      );
+    }
+
+    // ── Threat table
+    updateThreatTable(data);
+
+    // ── Timestamp
+    document.getElementById('last-refresh').textContent =
+      new Date().toLocaleTimeString('en-GB', { hour12: false });
+
+    log(`Metrics loaded — ${Object.keys(data.failed_logins).length} attacker IPs, ${(sr.SQLi||0)+(sr.XSS||0)} injection attempts, ${Object.keys(data.bot_activity).length} bot IPs`, 'ok');
+
+    document.querySelectorAll('#stats-grid > div').forEach((el, i) => {
+      el.style.opacity = '0';
+      setTimeout(() => { el.classList.add('fade-in'); el.style.opacity = ''; }, i * 80);
+    });
+  }
+
+  // ─────────────────────────────────────────────────────── FETCH
+  async function fetchMetrics() {
+    setLoading(true);
+    log(`Requesting ${API_URL}...`);
+
+    try {
+      const controller = new AbortController();
+      const timeoutId  = setTimeout(() => controller.abort(), 8000);
+
+      const response = await fetch(API_URL, {
+        method:  'GET',
+        headers: { 'Accept': 'application/json' },
+        signal:  controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => 'Unknown server error');
+        throw new Error(`HTTP ${response.status} — ${errText.slice(0, 120)}`);
+      }
+
+      const data = await response.json();
+
+      // Validate expected keys
+      if (!data.failed_logins || !data.suspicious_requests || !data.bot_activity) {
+        throw new Error('Malformed API response — missing required metric keys');
+      }
+
+      renderDashboard(data);
+
+    } catch (err) {
+      let detail = err.message;
+
+      if (err.name === 'AbortError') {
+        detail = 'Request timed out after 8 seconds';
+      } else if (
+        err.message.includes('Failed to fetch') ||
+        err.message.includes('NetworkError') ||
+        err.message.includes('net::ERR_CONNECTION_REFUSED')
+      ) {
+        detail = 'Connection refused — is the FastAPI server running on port 8000?';
+      }
+
+      showError(detail);
+      log(detail, 'error');
+
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────── UTILS
+  function escapeHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ─────────────────────────────────────────────────────── INIT
+  window.addEventListener('DOMContentLoaded', () => {
+    log('ThreatMonitor v1.0 initialised');
+    log('Flat-file architecture — no external DB dependencies', 'info');
+    fetchMetrics();
+  });
+</script>
+</body>
+</html>
