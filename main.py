@@ -1,15 +1,15 @@
-# pip install fastapi uvicorn
+# pip install fastapi uvicorn python-multipart supabase
 
 """
 main.py — E-Commerce Risk & Threat Monitoring — FastAPI Backend
 Run: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from parser import parse_logs
+from parser import parse_logs, parse_uploaded_file, parse_supabase_db
 
 # ------------------------------------------------------------------ #
 # App Initialisation
@@ -37,10 +37,18 @@ app.add_middleware(
 # Routes
 # ------------------------------------------------------------------ #
 
-@app.get("/api/metrics")
-def get_metrics():
+@app.post("/api/metrics")
+async def get_metrics(
+    file: UploadFile = File(None),
+    supabase_url: str = Form(None),
+    supabase_key: str = Form(None)
+):
     """
     Trigger log parsing and return the full threat metrics dictionary.
+
+    Accepts either:
+    - An uploaded log file (UploadFile)
+    - Supabase credentials (supabase_url and supabase_key)
 
     Returns:
         {
@@ -50,11 +58,29 @@ def get_metrics():
         }
     """
     try:
-        metrics = parse_logs()
+        if file:
+            # Handle uploaded file
+            file_content = await file.read()
+            metrics = parse_uploaded_file(file_content)
+        elif supabase_url and supabase_key:
+            # Handle Supabase database
+            metrics = parse_supabase_db(supabase_url, supabase_key)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Either upload a log file or provide Supabase credentials (supabase_url and supabase_key)"
+            )
+        
         return metrics
+    
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=503,
+            detail=str(exc),
+        )
+    except (ValueError, ConnectionError) as exc:
+        raise HTTPException(
+            status_code=400,
             detail=str(exc),
         )
     except Exception as exc:

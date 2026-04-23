@@ -5,6 +5,8 @@ Detects: failed logins, SQLi/XSS suspicious requests, bot activity.
 
 import re
 from collections import defaultdict
+from io import StringIO
+from supabase import create_client, Client
 
 LOG_FILE = "access.log"
 
@@ -50,16 +52,13 @@ BOT_UA_PATTERN = re.compile(
 # Public API
 # ------------------------------------------------------------------ #
 
-def parse_logs(log_file: str = LOG_FILE) -> dict:
-    """
-    Parse an NGINX combined-format access log and return a metrics dict.
+# ------------------------------------------------------------------ #
+# Public API
+# ------------------------------------------------------------------ #
 
-    Returns:
-        {
-            "failed_logins":       {ip: count, ...},
-            "suspicious_requests": {"SQLi": count, "XSS": count},
-            "bot_activity":        {ip: count, ...},
-        }
+def _parse_log_lines(lines: list[str]) -> dict:
+    """
+    Parse a list of log lines and return metrics dict.
     """
     failed_logins: dict[str, int] = defaultdict(int)
     suspicious_requests: dict[str, int] = {"SQLi": 0, "XSS": 0}
@@ -73,48 +72,40 @@ def parse_logs(log_file: str = LOG_FILE) -> dict:
 
     BOT_VELOCITY_THRESHOLD = 30
 
-    try:
-        with open(log_file, "r", errors="replace") as fh:
-            for line_number, raw_line in enumerate(fh, start=1):
-                line = raw_line.strip()
-                if not line:
-                    continue
+    for line_number, raw_line in enumerate(lines, start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
 
-                match = LOG_PATTERN.match(line)
-                if not match:
-                    continue
+        match = LOG_PATTERN.match(line)
+        if not match:
+            continue
 
-                ip          = match.group("ip")
-                method      = match.group("method")
-                path        = match.group("path")
-                status      = match.group("status")
-                user_agent  = match.group("user_agent")
+        ip          = match.group("ip")
+        method      = match.group("method")
+        path        = match.group("path")
+        status      = match.group("status")
+        user_agent  = match.group("user_agent")
 
-                # Decode URL-encoded characters for better pattern matching
-                decoded_path = _url_decode(path)
+        # Decode URL-encoded characters for better pattern matching
+        decoded_path = _url_decode(path)
 
-                # ---- 1. Failed Login Detection ---- #
-                if method == "POST" and "/api/login" in path and status == "401":
-                    failed_logins[ip] += 1
+        # ---- 1. Failed Login Detection ---- #
+        if method == "POST" and "/api/login" in decoded_path and status == "401":
+            failed_logins[ip] += 1
 
-                # ---- 2. Suspicious Request Detection ---- #
-                if SQLI_PATTERN.search(decoded_path):
-                    suspicious_requests["SQLi"] += 1
-                elif XSS_PATTERN.search(decoded_path):
-                    suspicious_requests["XSS"] += 1
+        # ---- 2. Suspicious Request Detection ---- #
+        if SQLI_PATTERN.search(decoded_path):
+            suspicious_requests["SQLi"] += 1
+        elif XSS_PATTERN.search(decoded_path):
+            suspicious_requests["XSS"] += 1
 
-                # ---- 3. Bot Detection (by User-Agent) ---- #
-                if BOT_UA_PATTERN.search(user_agent):
-                    ip_is_bot[ip] = True
+        # ---- 3. Bot Detection (by User-Agent) ---- #
+        if BOT_UA_PATTERN.search(user_agent):
+            ip_is_bot[ip] = True
 
-                # Track all request counts for velocity analysis
-                ip_request_count[ip] += 1
-
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"Log file '{log_file}' not found. "
-            "Run generate_logs.py first."
-        )
+        # Track all request counts for velocity analysis
+        ip_request_count[ip] += 1
 
     # Apply velocity threshold: flag any IP with excessive requests as bot
     for ip, count in ip_request_count.items():
@@ -131,6 +122,85 @@ def parse_logs(log_file: str = LOG_FILE) -> dict:
         "suspicious_requests": suspicious_requests,
         "bot_activity":        dict(bot_activity),
     }
+
+
+def parse_logs(log_file: str = LOG_FILE) -> dict:
+    """
+    Parse an NGINX combined-format access log and return a metrics dict.
+
+    Returns:
+        {
+            "failed_logins":       {ip: count, ...},
+            "suspicious_requests": {"SQLi": count, "XSS": count},
+            "bot_activity":        {ip: count, ...},
+        }
+    """
+    try:
+        with open(log_file, "r", errors="replace") as fh:
+            lines = fh.readlines()
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Log file '{log_file}' not found. "
+            "Run generate_logs.py first."
+        )
+    
+    return _parse_log_lines(lines)
+
+
+def parse_uploaded_file(file_content: bytes) -> dict:
+    """
+    Parse a raw log file buffer and return a metrics dict.
+
+    Args:
+        file_content: Raw bytes of the log file
+
+    Returns:
+        {
+            "failed_logins":       {ip: count, ...},
+            "suspicious_requests": {"SQLi": count, "XSS": count},
+            "bot_activity":        {ip: count, ...},
+        }
+    """
+    try:
+        content_str = file_content.decode('utf-8', errors='replace')
+        lines = content_str.splitlines()
+    except Exception as e:
+        raise ValueError(f"Failed to decode file content: {e}")
+    
+    return _parse_log_lines(lines)
+
+
+def parse_supabase_db(url: str, key: str) -> dict:
+    """
+    Connect to Supabase database and parse access_logs table.
+
+    Args:
+        url: Supabase project URL
+        key: Supabase API key
+
+    Returns:
+        {
+            "failed_logins":       {ip: count, ...},
+            "suspicious_requests": {"SQLi": count, "XSS": count},
+            "bot_activity":        {ip: count, ...},
+        }
+    """
+    try:
+        supabase: Client = create_client(url, key)
+        
+        # Fetch latest 1000 rows from access_logs table
+        response = supabase.table('access_logs').select('log_line').order('id', desc=True).limit(1000).execute()
+        
+        if not response.data:
+            raise ValueError("No data found in access_logs table")
+        
+        # Extract log lines from the response
+        lines = [row['log_line'] for row in response.data if row.get('log_line')]
+        
+    except Exception as e:
+        raise ConnectionError(f"Failed to connect to Supabase or fetch data: {e}")
+    
+    return _parse_log_lines(lines)
 
 
 # ------------------------------------------------------------------ #
